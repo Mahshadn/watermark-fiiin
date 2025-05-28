@@ -18,8 +18,8 @@ def create_test_image():
 
 def test_watermark_service():
     """Test the watermark service"""
-    # Service URL
-    url = "http://localhost:5000/watermark"
+    # Service URL - Updated for port 5001
+    url = "http://localhost:5001/watermark"
     
     # Create test image
     test_image_b64 = create_test_image()
@@ -58,14 +58,14 @@ def test_watermark_service():
             print(response.text)
             
     except requests.exceptions.ConnectionError:
-        print("❌ Cannot connect to service. Make sure it's running on localhost:5000")
+        print("❌ Cannot connect to service. Make sure it's running on localhost:5001")
     except Exception as e:
         print(f"❌ Error: {e}")
 
 def test_health_endpoint():
     """Test the health endpoint"""
     try:
-        response = requests.get("http://localhost:5000/health")
+        response = requests.get("http://localhost:5001/health")
         if response.status_code == 200:
             print("✅ Health check passed!")
             print(response.json())
@@ -86,3 +86,4 @@ if __name__ == "__main__":
     test_watermark_service()
     
     print("\n🎉 Test completed!")
+    print("🚀 Service ready for n8n at: http://localhost:5001/watermark")
