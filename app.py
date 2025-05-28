@@ -48,15 +48,11 @@ def hex_to_rgba(hex_color, alpha=255):
         return (r, g, b, alpha)
     return (255, 255, 255, alpha)  # Default white
 
-def add_watermark(image, social_handle, id_code, config):
-    """Add watermark to image"""
-    img = image.copy()
-    draw = ImageDraw.Draw(img, 'RGBA')
-    
+def add_single_watermark_text(draw, text, position, img_size, config):
+    """Add a single watermark text at specified position"""
     # Get configuration
     font_size = config.get('font_size', DEFAULT_CONFIG['font_size'])
     font_name = config.get('font', 'DejaVuSans-Bold.ttf')
-    position = config.get('position', 'bottom-right')
     margin = config.get('margin', DEFAULT_CONFIG['margin'])
     
     # Handle colors
@@ -73,16 +69,13 @@ def add_watermark(image, social_handle, id_code, config):
     # Load font
     font = load_font(font_name, font_size)
     
-    # Create watermark text
-    watermark_text = f"{social_handle}\n{id_code}"
-    
     # Get text dimensions
-    bbox = draw.textbbox((0, 0), watermark_text, font=font)
+    bbox = draw.textbbox((0, 0), text, font=font)
     text_width = bbox[2] - bbox[0]
     text_height = bbox[3] - bbox[1]
     
     # Calculate position
-    img_width, img_height = img.size
+    img_width, img_height = img_size
     
     positions = {
         'top-left': (margin, margin),
@@ -101,13 +94,38 @@ def add_watermark(image, social_handle, id_code, config):
     # Draw watermark
     draw.text(
         (x, y), 
-        watermark_text, 
+        text, 
         font=font, 
         fill=font_color,
         stroke_fill=stroke_color,
         stroke_width=stroke_width,
         align='left'
     )
+
+def add_watermark(image, social_handle, id_code, config):
+    """Add watermark to image - supports single or separate positioning"""
+    img = image.copy()
+    draw = ImageDraw.Draw(img, 'RGBA')
+    
+    # Check if separate positioning is requested
+    handle_position = config.get('handle_position')
+    id_position = config.get('id_position')
+    
+    if handle_position and id_position:
+        # Add social handle and ID separately
+        handle_config = config.copy()
+        handle_config.update(config.get('handle_style', {}))
+        
+        id_config = config.copy()
+        id_config.update(config.get('id_style', {}))
+        
+        add_single_watermark_text(draw, social_handle, handle_position, img.size, handle_config)
+        add_single_watermark_text(draw, id_code, id_position, img.size, id_config)
+    else:
+        # Original combined watermark
+        watermark_text = f"{social_handle}\n{id_code}"
+        position = config.get('position', 'bottom-right')
+        add_single_watermark_text(draw, watermark_text, position, img.size, config)
     
     return img
 
@@ -150,7 +168,12 @@ def watermark_image():
             'stroke_width': data.get('stroke_width', 2),
             'position': data.get('position', 'bottom-right'),
             'margin': data.get('margin', 20),
-            'opacity': data.get('opacity', 200)
+            'opacity': data.get('opacity', 200),
+            # New separate positioning options
+            'handle_position': data.get('handle_position'),
+            'id_position': data.get('id_position'),
+            'handle_style': data.get('handle_style', {}),
+            'id_style': data.get('id_style', {})
         }
         
         # Add watermark
@@ -182,7 +205,10 @@ def watermark_image():
             'metadata': {
                 'social_handle': social_handle,
                 'id_code': id_code,
-                'position': config['position'],
+                'positions': {
+                    'handle': config.get('handle_position', config.get('position')),
+                    'id': config.get('id_position', config.get('position'))
+                },
                 'font_size': config['font_size'],
                 'format': output_format,
                 'processed_at': datetime.utcnow().isoformat()
