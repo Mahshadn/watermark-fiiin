@@ -1,11 +1,11 @@
 version: '3.8'
 
 services:
-  watermark-service:
+  watermark-fiiin:
     build: .
     container_name: watermark-fiiin
     ports:
-      - "5001:5000"
+      - "5001:5000"  # External port 5001, internal port 5000
     environment:
       - FLASK_ENV=production
     restart: unless-stopped
@@ -18,7 +18,7 @@ services:
     # networks:
     #   - n8n-network
 
-# Uncomment if you have an existing network
+# Uncomment if you have an existing network for n8n integration
 # networks:
 #   n8n-network:
 #     external: true
