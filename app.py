@@ -3,6 +3,7 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 import base64
 import os
+import glob
 from datetime import datetime
 
 app = Flask(__name__)
@@ -13,31 +14,68 @@ DEFAULT_CONFIG = {
     'font_color': (255, 255, 255, 200),  # White with transparency
     'stroke_color': (0, 0, 0, 255),      # Black stroke
     'stroke_width': 2,
-    'margin': 20
+    'margin': 20,
+    'transparency': 1.0  # Full opacity
 }
 
-def load_font(font_name, size):
-    """Load font with fallback options"""
-    font_paths = [
-        f"/usr/share/fonts/truetype/dejavu/{font_name}",
-        f"/usr/share/fonts/truetype/liberation/{font_name}",
-        f"/System/Library/Fonts/{font_name}",
-        f"C:/Windows/Fonts/{font_name}"
+def get_system_fonts():
+    """Get all available system fonts"""
+    font_paths = []
+    font_dirs = [
+        "/usr/share/fonts/",           # Linux/Ubuntu
+        "/System/Library/Fonts/",      # macOS
+        "C:/Windows/Fonts/",           # Windows
+        "/usr/share/fonts/truetype/",  # Ubuntu truetype
+        "/usr/share/fonts/opentype/",  # Ubuntu opentype
     ]
     
-    # Try to load custom font
-    for path in font_paths:
-        try:
-            if os.path.exists(path):
-                return ImageFont.truetype(path, size)
-        except:
-            continue
+    fonts = {}
+    for font_dir in font_dirs:
+        if os.path.exists(font_dir):
+            for root, dirs, files in os.walk(font_dir):
+                for file in files:
+                    if file.lower().endswith(('.ttf', '.otf', '.ttc')):
+                        full_path = os.path.join(root, file)
+                        fonts[file] = full_path
     
-    # Fallback to default font
-    try:
-        return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size)
-    except:
-        return ImageFont.load_default()
+    return fonts
+
+def load_font(font_name, size):
+    """Load font with automatic system font detection"""
+    available_fonts = get_system_fonts()
+    
+    # Try exact match first
+    if font_name in available_fonts:
+        try:
+            return ImageFont.truetype(available_fonts[font_name], size)
+        except:
+            pass
+    
+    # Try partial match (case insensitive)
+    for font_file, font_path in available_fonts.items():
+        if font_name.lower() in font_file.lower():
+            try:
+                return ImageFont.truetype(font_path, size)
+            except:
+                continue
+    
+    # Fallback fonts in order of preference
+    fallback_fonts = [
+        "DejaVuSans-Bold.ttf", "DejaVuSans.ttf",
+        "arial.ttf", "Arial.ttf", "ARIAL.TTF",
+        "helvetica.ttc", "Helvetica.ttc",
+        "LiberationSans-Bold.ttf", "LiberationSans.ttf"
+    ]
+    
+    for fallback in fallback_fonts:
+        if fallback in available_fonts:
+            try:
+                return ImageFont.truetype(available_fonts[fallback], size)
+            except:
+                continue
+    
+    # Ultimate fallback
+    return ImageFont.load_default()
 
 def hex_to_rgba(hex_color, alpha=255):
     """Convert hex color to RGBA tuple"""
@@ -48,35 +86,43 @@ def hex_to_rgba(hex_color, alpha=255):
         return (r, g, b, alpha)
     return (255, 255, 255, alpha)  # Default white
 
-def add_single_watermark_text(draw, text, position, img_size, config):
-    """Add a single watermark text at specified position"""
-    # Get configuration
-    font_size = config.get('font_size', DEFAULT_CONFIG['font_size'])
-    font_name = config.get('font', 'DejaVuSans-Bold.ttf')
-    margin = config.get('margin', DEFAULT_CONFIG['margin'])
-    
-    # Handle colors
-    font_color = config.get('font_color', '#FFFFFF')
-    if isinstance(font_color, str):
-        font_color = hex_to_rgba(font_color, config.get('opacity', 200))
-    
-    stroke_color = config.get('stroke_color', '#000000')
-    if isinstance(stroke_color, str):
-        stroke_color = hex_to_rgba(stroke_color, 255)
-    
-    stroke_width = config.get('stroke_width', DEFAULT_CONFIG['stroke_width'])
-    
-    # Load font
-    font = load_font(font_name, font_size)
-    
-    # Get text dimensions
-    bbox = draw.textbbox((0, 0), text, font=font)
-    text_width = bbox[2] - bbox[0]
-    text_height = bbox[3] - bbox[1]
-    
-    # Calculate position
+def parse_position(position_config, img_size, text_size, margin=20):
+    """Parse position - supports both named positions and percentage positioning"""
     img_width, img_height = img_size
+    text_width, text_height = text_size
     
+    # Handle percentage positioning
+    if isinstance(position_config, dict):
+        x = margin
+        y = margin
+        
+        # Parse left/right positioning
+        if 'left' in position_config:
+            if isinstance(position_config['left'], str) and position_config['left'].endswith('%'):
+                x = int((float(position_config['left'][:-1]) / 100) * img_width)
+            else:
+                x = int(position_config['left'])
+        elif 'right' in position_config:
+            if isinstance(position_config['right'], str) and position_config['right'].endswith('%'):
+                x = img_width - int((float(position_config['right'][:-1]) / 100) * img_width) - text_width
+            else:
+                x = img_width - int(position_config['right']) - text_width
+        
+        # Parse top/bottom positioning
+        if 'top' in position_config:
+            if isinstance(position_config['top'], str) and position_config['top'].endswith('%'):
+                y = int((float(position_config['top'][:-1]) / 100) * img_height)
+            else:
+                y = int(position_config['top'])
+        elif 'bottom' in position_config:
+            if isinstance(position_config['bottom'], str) and position_config['bottom'].endswith('%'):
+                y = img_height - int((float(position_config['bottom'][:-1]) / 100) * img_height) - text_height
+            else:
+                y = img_height - int(position_config['bottom']) - text_height
+        
+        return (x, y)
+    
+    # Handle named positions (existing functionality)
     positions = {
         'top-left': (margin, margin),
         'top-center': ((img_width - text_width) // 2, margin),
@@ -89,7 +135,61 @@ def add_single_watermark_text(draw, text, position, img_size, config):
         'bottom-right': (img_width - text_width - margin, img_height - text_height - margin)
     }
     
-    x, y = positions.get(position, positions['bottom-right'])
+    return positions.get(position_config, positions['bottom-right'])
+
+def apply_transparency(image, transparency):
+    """Apply transparency to an image"""
+    if transparency >= 1.0:
+        return image
+    
+    if image.mode != 'RGBA':
+        image = image.convert('RGBA')
+    
+    # Apply transparency
+    alpha = image.split()[-1]
+    alpha = alpha.point(lambda p: int(p * transparency))
+    image.putalpha(alpha)
+    
+    return image
+
+def add_single_watermark_text(draw, text, position_config, img_size, config):
+    """Add a single watermark text at specified position"""
+    # Get configuration
+    font_size = config.get('font_size', DEFAULT_CONFIG['font_size'])
+    font_name = config.get('font', 'DejaVuSans-Bold.ttf')
+    margin = config.get('margin', DEFAULT_CONFIG['margin'])
+    transparency = config.get('transparency', DEFAULT_CONFIG['transparency'])
+    
+    # Handle colors
+    font_color = config.get('font_color', '#FFFFFF')
+    if isinstance(font_color, str):
+        font_color = hex_to_rgba(font_color, config.get('opacity', 200))
+    
+    stroke_color = config.get('stroke_color', '#000000')
+    if isinstance(stroke_color, str):
+        stroke_color = hex_to_rgba(stroke_color, 255)
+    
+    stroke_width = config.get('stroke_width', DEFAULT_CONFIG['stroke_width'])
+    
+    # Apply transparency to colors
+    if transparency < 1.0:
+        font_color = tuple(list(font_color[:3]) + [int(font_color[3] * transparency)])
+        stroke_color = tuple(list(stroke_color[:3]) + [int(stroke_color[3] * transparency)])
+    
+    # Load font
+    font = load_font(font_name, font_size)
+    
+    # Get text dimensions
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
+    
+    # Parse position (supports both named and percentage)
+    x, y = parse_position(position_config, img_size, (text_width, text_height), margin)
+    
+    # Ensure text stays within image bounds
+    x = max(0, min(x, img_size[0] - text_width))
+    y = max(0, min(y, img_size[1] - text_height))
     
     # Draw watermark
     draw.text(
@@ -133,6 +233,45 @@ def add_watermark(image, social_handle, id_code, config):
 def health_check():
     return jsonify({'status': 'healthy', 'service': 'watermark-fiiin'})
 
+@app.route('/fonts', methods=['GET'])
+def list_fonts():
+    """List all available system fonts"""
+    fonts = get_system_fonts()
+    font_list = list(fonts.keys())
+    
+    # Categorize fonts
+    categorized = {
+        'serif': [],
+        'sans_serif': [],
+        'monospace': [],
+        'other': []
+    }
+    
+    for font in font_list:
+        font_lower = font.lower()
+        if any(serif in font_lower for serif in ['times', 'serif', 'georgia', 'palatino']):
+            categorized['serif'].append(font)
+        elif any(mono in font_lower for mono in ['mono', 'courier', 'consolas', 'inconsolata']):
+            categorized['monospace'].append(font)
+        elif any(sans in font_lower for sans in ['arial', 'helvetica', 'dejavu', 'liberation', 'ubuntu', 'roboto']):
+            categorized['sans_serif'].append(font)
+        else:
+            categorized['other'].append(font)
+    
+    return jsonify({
+        'total_fonts': len(font_list),
+        'fonts': {
+            'all': sorted(font_list),
+            'categorized': {k: sorted(v) for k, v in categorized.items()}
+        },
+        'recommended': [
+            'DejaVuSans-Bold.ttf',
+            'DejaVuSans.ttf', 
+            'Arial.ttf',
+            'arial.ttf'
+        ]
+    })
+
 @app.route('/watermark', methods=['POST'])
 def watermark_image():
     try:
@@ -169,7 +308,8 @@ def watermark_image():
             'position': data.get('position', 'bottom-right'),
             'margin': data.get('margin', 20),
             'opacity': data.get('opacity', 200),
-            # New separate positioning options
+            'transparency': data.get('transparency', 1.0),  # New transparency option
+            # Separate positioning options
             'handle_position': data.get('handle_position'),
             'id_position': data.get('id_position'),
             'handle_style': data.get('handle_style', {}),
@@ -210,6 +350,7 @@ def watermark_image():
                     'id': config.get('id_position', config.get('position'))
                 },
                 'font_size': config['font_size'],
+                'transparency': config['transparency'],
                 'format': output_format,
                 'processed_at': datetime.utcnow().isoformat()
             }
