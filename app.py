@@ -137,61 +137,47 @@ def parse_position(position_config, img_size, text_size, margin=20):
     
     return positions.get(position_config, positions['bottom-right'])
 
-def apply_transparency(image, transparency):
-    """Apply transparency to an image"""
-    if transparency >= 1.0:
-        return image
+def create_text_overlay(text, position_config, img_size, config):
+    """Create a transparent text overlay that can be blended with main image"""
+    img_width, img_height = img_size
     
-    if image.mode != 'RGBA':
-        image = image.convert('RGBA')
-    
-    # Apply transparency
-    alpha = image.split()[-1]
-    alpha = alpha.point(lambda p: int(p * transparency))
-    image.putalpha(alpha)
-    
-    return image
-
-def add_single_watermark_text(draw, text, position_config, img_size, config):
-    """Add a single watermark text at specified position"""
     # Get configuration
     font_size = config.get('font_size', DEFAULT_CONFIG['font_size'])
     font_name = config.get('font', 'DejaVuSans-Bold.ttf')
     margin = config.get('margin', DEFAULT_CONFIG['margin'])
     transparency = config.get('transparency', DEFAULT_CONFIG['transparency'])
     
-    # Handle colors
+    # Handle colors - full opacity for the overlay, transparency applied later
     font_color = config.get('font_color', '#FFFFFF')
     if isinstance(font_color, str):
-        font_color = hex_to_rgba(font_color, config.get('opacity', 200))
+        font_color = hex_to_rgba(font_color, 255)  # Full opacity initially
     
     stroke_color = config.get('stroke_color', '#000000')
     if isinstance(stroke_color, str):
-        stroke_color = hex_to_rgba(stroke_color, 255)
+        stroke_color = hex_to_rgba(stroke_color, 255)  # Full opacity initially
     
     stroke_width = config.get('stroke_width', DEFAULT_CONFIG['stroke_width'])
     
-    # Apply transparency to colors
-    if transparency < 1.0:
-        font_color = tuple(list(font_color[:3]) + [int(font_color[3] * transparency)])
-        stroke_color = tuple(list(stroke_color[:3]) + [int(stroke_color[3] * transparency)])
-    
     # Load font
     font = load_font(font_name, font_size)
+    
+    # Create a transparent overlay the same size as the main image
+    overlay = Image.new('RGBA', (img_width, img_height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
     
     # Get text dimensions
     bbox = draw.textbbox((0, 0), text, font=font)
     text_width = bbox[2] - bbox[0]
     text_height = bbox[3] - bbox[1]
     
-    # Parse position (supports both named and percentage)
+    # Parse position
     x, y = parse_position(position_config, img_size, (text_width, text_height), margin)
     
     # Ensure text stays within image bounds
-    x = max(0, min(x, img_size[0] - text_width))
-    y = max(0, min(y, img_size[1] - text_height))
+    x = max(0, min(x, img_width - text_width))
+    y = max(0, min(y, img_height - text_height))
     
-    # Draw watermark
+    # Draw text on overlay with full opacity
     draw.text(
         (x, y), 
         text, 
@@ -201,11 +187,37 @@ def add_single_watermark_text(draw, text, position_config, img_size, config):
         stroke_width=stroke_width,
         align='left'
     )
+    
+    # Apply transparency to the entire overlay
+    if transparency < 1.0:
+        # Create alpha mask
+        alpha = overlay.split()[-1]  # Get alpha channel
+        alpha = alpha.point(lambda p: int(p * transparency))  # Apply transparency
+        overlay.putalpha(alpha)
+    
+    return overlay
+
+def add_single_watermark_text(img, text, position_config, config):
+    """Add a single watermark text using proper transparency blending"""
+    # Create text overlay
+    overlay = create_text_overlay(text, position_config, img.size, config)
+    
+    # Blend overlay with main image
+    if img.mode != 'RGBA':
+        img = img.convert('RGBA')
+    
+    # Composite the overlay onto the main image
+    img = Image.alpha_composite(img, overlay)
+    
+    return img
 
 def add_watermark(image, social_handle, id_code, config):
-    """Add watermark to image - supports single or separate positioning"""
+    """Add watermark to image - supports single or separate positioning with proper transparency"""
     img = image.copy()
-    draw = ImageDraw.Draw(img, 'RGBA')
+    
+    # Ensure image is in RGBA mode for transparency support
+    if img.mode != 'RGBA':
+        img = img.convert('RGBA')
     
     # Check if separate positioning is requested
     handle_position = config.get('handle_position')
@@ -219,13 +231,13 @@ def add_watermark(image, social_handle, id_code, config):
         id_config = config.copy()
         id_config.update(config.get('id_style', {}))
         
-        add_single_watermark_text(draw, social_handle, handle_position, img.size, handle_config)
-        add_single_watermark_text(draw, id_code, id_position, img.size, id_config)
+        img = add_single_watermark_text(img, social_handle, handle_position, handle_config)
+        img = add_single_watermark_text(img, id_code, id_position, id_config)
     else:
         # Original combined watermark
         watermark_text = f"{social_handle}\n{id_code}"
         position = config.get('position', 'bottom-right')
-        add_single_watermark_text(draw, watermark_text, position, img.size, config)
+        img = add_single_watermark_text(img, watermark_text, position, config)
     
     return img
 
@@ -308,7 +320,7 @@ def watermark_image():
             'position': data.get('position', 'bottom-right'),
             'margin': data.get('margin', 20),
             'opacity': data.get('opacity', 200),
-            'transparency': data.get('transparency', 1.0),  # New transparency option
+            'transparency': data.get('transparency', 1.0),  # Transparency control
             # Separate positioning options
             'handle_position': data.get('handle_position'),
             'id_position': data.get('id_position'),
